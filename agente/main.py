@@ -6,6 +6,12 @@ import fdb
 import logging
 import sys
 
+# Para descobrir a pasta real quando compilado com PyInstaller
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Configuração de Logs Nativos do Python
 logger = logging.getLogger("AgenteNFSe")
 logger.setLevel(logging.DEBUG)
@@ -13,13 +19,13 @@ logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 # Log normal (INFO, DEBUG)
-info_handler = logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "agente.log"), encoding="utf-8")
+info_handler = logging.FileHandler(os.path.join(BASE_DIR, "agente.log"), encoding="utf-8")
 info_handler.setLevel(logging.INFO)
 info_handler.setFormatter(formatter)
 logger.addHandler(info_handler)
 
 # Log de erro (ERROR, CRITICAL)
-error_handler = logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "agente_error.log"), encoding="utf-8")
+error_handler = logging.FileHandler(os.path.join(BASE_DIR, "agente_error.log"), encoding="utf-8")
 error_handler.setLevel(logging.ERROR)
 error_handler.setFormatter(formatter)
 logger.addHandler(error_handler)
@@ -29,7 +35,7 @@ console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
 # Garantir que o last_id seja salvo na pasta real do executavel
-LAST_ID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".last_id")
+LAST_ID_FILE = os.path.join(BASE_DIR, ".last_id")
 
 def get_known_error_category(error_message):
     known_errors = {
@@ -71,7 +77,7 @@ def set_last_id(last_id):
 def main():
     logger.info("Iniciando Agente Monitor de Notas Fiscais com Anti-Spam...")
     
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.ini")
+    config_path = os.path.join(BASE_DIR, "config.ini")
     config = configparser.ConfigParser()
     
     if not os.path.exists(config_path):
