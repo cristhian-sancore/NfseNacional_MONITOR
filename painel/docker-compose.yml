@@ -9,7 +9,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db-nfe:5432/monitor_nfe
       - ADMIN_USER=admin
-      - ADMIN_PASS=f@$p3l
+      - ADMIN_PASS=f@$$p3l
       - WEBHOOK_KEY=FASPEL_KEY_2026
     depends_on:
       db-nfe:
