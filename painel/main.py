@@ -85,7 +85,12 @@ def get_settings(db: Session):
         db.refresh(settings)
     return settings
 
-def send_whatsapp_message(text: str, db: Session):
+def send_whatsapp_message(text: str, db: Session = None):
+    close_db = False
+    if db is None:
+        db = database.SessionLocal()
+        close_db = True
+        
     try:
         settings = get_settings(db)
         if not all([settings.evo_url, settings.evo_instance, settings.evo_token, settings.evo_number]):
@@ -112,6 +117,9 @@ def send_whatsapp_message(text: str, db: Session):
         return response.json()
     except Exception as e:
         print(f"Falha ao notificar WhatsApp: {e}")
+    finally:
+        if close_db:
+            db.close()
 
 async def summary_worker():
     while True:
@@ -224,7 +232,7 @@ def receive_error_log(
             f"⚠️ *Status:* {log.error_category}\n"
             f"📄 *Detalhe:* {log.original_error[:200]}"
         )
-        background_tasks.add_task(send_whatsapp_message, text, db)
+        background_tasks.add_task(send_whatsapp_message, text, None)
     
     # Erros normais de nota fiscal agora vão apenas pro banco e serão pegos pelo grouped_alerts_worker (15 em 15 min)
     
