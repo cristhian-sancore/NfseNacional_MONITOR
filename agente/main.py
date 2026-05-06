@@ -4,6 +4,7 @@ import configparser
 import requests
 import fdb
 import logging
+from logging.handlers import RotatingFileHandler
 import sys
 
 # Para descobrir a pasta real quando compilado com PyInstaller
@@ -19,13 +20,13 @@ logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 # Log normal (INFO, DEBUG)
-info_handler = logging.FileHandler(os.path.join(BASE_DIR, "agente.log"), encoding="utf-8")
+info_handler = RotatingFileHandler(os.path.join(BASE_DIR, "agente.log"), maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
 info_handler.setLevel(logging.INFO)
 info_handler.setFormatter(formatter)
 logger.addHandler(info_handler)
 
 # Log de erro (ERROR, CRITICAL)
-error_handler = logging.FileHandler(os.path.join(BASE_DIR, "agente_error.log"), encoding="utf-8")
+error_handler = RotatingFileHandler(os.path.join(BASE_DIR, "agente_error.log"), maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
 error_handler.setLevel(logging.ERROR)
 error_handler.setFormatter(formatter)
 logger.addHandler(error_handler)
@@ -107,8 +108,9 @@ def main():
     
     entity_name = config['AGENT'].get('EntityName', 'Desconhecido')
     panel_url = config['AGENT'].get('PanelUrl', 'http://localhost:8000/api/webhook')
+    panel_api_key = config['AGENT'].get('PanelApiKey', 'FASPEL_KEY_2026')
     interval_minutes = config['AGENT'].getint('CheckIntervalMinutes', 5)
-    jboss_url = config['AGENT'].get('JbossUrl', 'http://localhost:8080/servicosweb-ws/rest')
+    jboss_url = config.get("AGENT", "JbossUrl", fallback="http://localhost:8080/servicosweb-ws/rest")
 
     last_id = get_last_id()
     
@@ -117,6 +119,18 @@ def main():
     jboss_was_offline = False
 
     while True:
+        # Enviar Ping de Heartbeat para o Painel
+        try:
+            heartbeat_url = panel_url.replace("/webhook", "/heartbeat")
+            requests.post(
+                heartbeat_url, 
+                json={"entity_name": entity_name}, 
+                headers={"X-API-Key": panel_api_key}, 
+                timeout=5
+            )
+        except Exception as e:
+            logger.debug(f"Falha ao enviar heartbeat: {e}")
+
         logger.info("Checando novos erros no banco de dados...")
         
         try:
@@ -130,6 +144,20 @@ def main():
             )
             cur = con.cursor()
             
+            # Sincronização Inicial: Ignorar erros velhos se for a primeira vez rodando
+            if last_id == 0:
+                try:
+                    cur.execute("SELECT MAX(COD_NLE) FROM NFE_LOG_ERROS")
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        last_id = row[0]
+                        set_last_id(last_id)
+                        logger.info(f"Sincronização inicial concluída. Monitorando apenas erros a partir do ID: {last_id}")
+                    else:
+                        logger.info("Nenhum erro encontrado no banco. Começando do ID 0.")
+                except Exception as e:
+                    logger.error(f"Erro na sincronização inicial: {e}")
+            
             # Se o banco estava offline e conectou agora, envia mensagem de recuperação
             if db_was_offline:
                 db_was_offline = False
@@ -138,7 +166,7 @@ def main():
                         "entity_name": entity_name,
                         "error_category": "Banco de Dados Restaurado",
                         "original_error": "A conexão com o banco de dados Firebird foi restabelecida com sucesso!"
-                    }, timeout=10)
+                    }, headers={"X-API-Key": panel_api_key}, timeout=10)
                     logger.info("Enviado aviso de restauração do banco.")
                 except:
                     pass
@@ -165,7 +193,7 @@ def main():
                 }
                 
                 try:
-                    resp = requests.post(panel_url, json=payload, timeout=10)
+                    resp = requests.post(panel_url, json=payload, headers={"X-API-Key": panel_api_key}, timeout=10)
                     if resp.status_code == 200:
                         logger.info(f"Erro {row_id} enviado com sucesso para o painel.")
                     else:
@@ -195,7 +223,7 @@ def main():
                     "original_error": f"Falha na conexão com o banco ({db_host}:{db_port}). O sistema tentará reconectar a cada {interval_minutes}min. Detalhe: {error_msg}"
                 }
                 try:
-                    resp = requests.post(panel_url, json=payload, timeout=10)
+                    resp = requests.post(panel_url, json=payload, headers={"X-API-Key": panel_api_key}, timeout=10)
                     if resp.status_code == 200:
                         logger.info("Alerta de banco de dados offline enviado.")
                 except Exception as net_e:
@@ -206,8 +234,11 @@ def main():
             logger.info(f"Checando JBoss em {jboss_url} ...")
             try:
                 jboss_resp = requests.get(jboss_url, timeout=10)
-                if jboss_resp.status_code >= 500:
-                    raise Exception(f"Servidor retornou código {jboss_resp.status_code}")
+                
+                # Se retornar 404, significa que o serviço Tomcat/JBoss está rodando, 
+                # mas o aplicativo (servicosweb-ws) falhou ao iniciar ou não existe.
+                if jboss_resp.status_code == 404 or jboss_resp.status_code >= 500:
+                    raise Exception(f"Aplicativo não encontrado ou com erro (HTTP {jboss_resp.status_code})")
                 
                 # JBoss está vivo
                 logger.info("JBoss está online e respondendo.")
@@ -220,7 +251,7 @@ def main():
                             "entity_name": entity_name,
                             "error_category": "JBoss Restaurado",
                             "original_error": "O serviço do JBoss voltou a responder com sucesso!"
-                        }, timeout=10)
+                        }, headers={"X-API-Key": panel_api_key}, timeout=10)
                         logger.info("Enviado aviso de restauração do JBoss.")
                     except:
                         pass
@@ -237,7 +268,7 @@ def main():
                         "original_error": f"O serviço JBoss parou de responder. O monitor tentará reconectar a cada {interval_minutes}min. Detalhe: {str(jboss_e)[:100]}"
                     }
                     try:
-                        requests.post(panel_url, json=payload_jboss, timeout=10)
+                        requests.post(panel_url, json=payload_jboss, headers={"X-API-Key": panel_api_key}, timeout=10)
                         logger.info("Alerta de JBoss offline enviado ao painel.")
                     except Exception as net_e:
                         logger.error("Falha ao enviar alerta de JBoss ao painel.")
