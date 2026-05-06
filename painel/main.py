@@ -56,13 +56,8 @@ def send_whatsapp_message(text: str, db: Session):
     
     payload = {
         "number": settings.evo_number,
-        "options": {
-            "delay": 1200,
-            "presence": "composing"
-        },
-        "textMessage": {
-            "text": text
-        }
+        "text": text,
+        "delay": 1200
     }
     
     response = requests.post(endpoint, json=payload, headers=headers, timeout=10)
