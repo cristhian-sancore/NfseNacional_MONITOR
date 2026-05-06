@@ -404,9 +404,12 @@
                         </small>
                     </div>
                     
-                    <div style="display: flex; gap: 1rem; align-items: center;">
-                        <button type="submit" class="btn-save">Salvar Configurações</button>
-                        <button type="button" class="btn-test" onclick="testWhatsApp(event)">Testar WhatsApp</button>
+                    <div style="display: flex; gap: 1rem; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; gap: 1rem; align-items: center;">
+                            <button type="submit" class="btn-save">Salvar Configurações</button>
+                            <button type="button" class="btn-test" onclick="testWhatsApp(event)">Testar WhatsApp</button>
+                        </div>
+                        <button type="button" class="btn-test" onclick="clearHistory()" style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.5);">Apagar Histórico</button>
                     </div>
                     <div id="save-msg" style="display: none; color: #4ade80; margin-top: 1rem; text-align: center; font-weight: 600;"></div>
                 </form>
@@ -695,6 +698,37 @@
             } finally {
                 btn.innerText = originalText;
                 btn.disabled = false;
+            }
+        }
+
+        async function clearHistory() {
+            if (!confirm("⚠️ Tem certeza que deseja apagar TODO o histórico de erros? Esta ação não pode ser desfeita.")) return;
+            
+            try {
+                const response = await fetch('/api/errors/clear', {
+                    method: 'DELETE',
+                    headers: getAuthHeaders()
+                });
+                
+                if (response.status === 401) return logout();
+                
+                const result = await response.json();
+                const msgDiv = document.getElementById('save-msg');
+                
+                if (response.ok) {
+                    msgDiv.style.color = '#4ade80';
+                    msgDiv.innerText = result.message || "Histórico apagado com sucesso!";
+                    fetchDashboardData();
+                } else {
+                    msgDiv.style.color = '#ef4444';
+                    msgDiv.innerText = 'Falha ao apagar: ' + (result.detail || 'Erro desconhecido');
+                }
+                msgDiv.style.display = 'block';
+                setTimeout(() => { msgDiv.style.display = 'none'; }, 5000);
+                
+            } catch (error) {
+                console.error('Erro ao limpar histórico:', error);
+                alert('Erro ao conectar com a API para limpar histórico.');
             }
         }
 

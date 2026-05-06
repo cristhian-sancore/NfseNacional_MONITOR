@@ -386,6 +386,16 @@ def api_update_settings(settings_data: schemas.SystemSettingsUpdate, db: Session
     db.refresh(settings)
     return settings
 
+@app.delete("/api/errors/clear")
+def clear_error_history(db: Session = Depends(database.get_db), username: str = Depends(get_current_username)):
+    try:
+        deleted = db.query(models.ErrorLog).delete()
+        db.commit()
+        return {"status": "success", "message": f"{deleted} registros apagados com sucesso."}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/settings/test")
 def api_test_whatsapp(db: Session = Depends(database.get_db), username: str = Depends(get_current_username)):
     try:
