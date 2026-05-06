@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  painel-nfe:
+    build: .
+    container_name: painel-monitor-nfe
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db-nfe:5432/monitor_nfe
+      - EVOLUTION_API_URL=${EVOLUTION_API_URL}
+      - EVOLUTION_INSTANCE=${EVOLUTION_INSTANCE}
+      - EVOLUTION_APIKEY=${EVOLUTION_APIKEY}
+      - EVOLUTION_NUMBER=${EVOLUTION_NUMBER}
+    depends_on:
+      db-nfe:
+        condition: service_healthy
+    networks:
+      - nfe-network
+
+  db-nfe:
+    image: postgres:15-alpine
+    container_name: postgres-monitor-nfe
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=monitor_nfe
+    ports:
+      - "5433:5432" # Expõe na porta 5433 para não conflitar com seu postgres existente
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d monitor_nfe"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nfe-network
+
+networks:
+  nfe-network:
+
+volumes:
+  postgres_data:

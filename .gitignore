@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Logs e IDs
+*.log
+.last_id
+
+# Executáveis
+*.exe
+build/
+dist/
+*.spec
+
+# VS Code / IDEs
+.vscode/
+.idea/
+
+# Dotenv
+.env
