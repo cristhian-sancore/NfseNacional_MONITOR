@@ -159,9 +159,50 @@ async def summary_worker():
         
         await asyncio.sleep(60)
 
+async def grouped_alerts_worker():
+    # Envia notificações a cada 15 minutos com os erros acumulados no período
+    INTERVAL_MINUTES = 15
+    last_grouped_send = datetime.now(timezone.utc)
+    
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            if (now - last_grouped_send).total_seconds() >= INTERVAL_MINUTES * 60:
+                db = database.SessionLocal()
+                
+                # Buscar erros que ocorreram desde o último envio agrupado
+                logs = db.query(models.ErrorLog).filter(models.ErrorLog.created_at >= last_grouped_send).all()
+                
+                if logs:
+                    total_errors = len(logs)
+                    from collections import Counter
+                    entities = Counter([l.entity_name for l in logs])
+                    categories = Counter([l.error_category for l in logs])
+                    
+                    text = f"🚨 *Novos Erros ({INTERVAL_MINUTES} min)* 🚨\n\n"
+                    text += f"Total: {total_errors} novos erros\n\n"
+                    
+                    text += "🏢 *Entidades:*\n"
+                    for ent, count in entities.items():
+                        text += f"  • {ent}: {count} erros\n"
+                    
+                    text += "\n⚠️ *Principais Tipos:*\n"
+                    for cat, count in categories.most_common(5):
+                        text += f"  • {cat}: {count}\n"
+                        
+                    send_whatsapp_message(text, db)
+                
+                last_grouped_send = now
+                db.close()
+        except Exception as e:
+            print(f"Erro no grouped_alerts_worker: {e}")
+            
+        await asyncio.sleep(30)
+
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(summary_worker())
+    asyncio.create_task(grouped_alerts_worker())
 
 @app.post("/api/webhook", response_model=schemas.ErrorLogResponse)
 def receive_error_log(
@@ -175,15 +216,17 @@ def receive_error_log(
     db.commit()
     db.refresh(db_log)
     
-    text = (
-        f"🚨 *Alerta Monitor NFE* 🚨\n\n"
-        f"🏢 *Entidade:* {log.entity_name}\n"
-        f"⚠️ *Erro:* {log.error_category}\n"
-        f"📄 *Detalhe:* {log.original_error}"
-    )
+    # Se for uma notificação CRÍTICA (Queda de servidor), avisa na hora (Fura-Fila)
+    if "Inacessível" in log.error_category or "Restaurado" in log.error_category:
+        text = (
+            f"🚨 *ALERTA CRÍTICO* 🚨\n\n"
+            f"🏢 *Entidade:* {log.entity_name}\n"
+            f"⚠️ *Status:* {log.error_category}\n"
+            f"📄 *Detalhe:* {log.original_error[:200]}"
+        )
+        background_tasks.add_task(send_whatsapp_message, text, db)
     
-    # Enviar em background para o webhook não demorar
-    background_tasks.add_task(send_whatsapp_message, text, db)
+    # Erros normais de nota fiscal agora vão apenas pro banco e serão pegos pelo grouped_alerts_worker (15 em 15 min)
     
     return db_log
 
