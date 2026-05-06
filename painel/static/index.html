@@ -479,6 +479,20 @@
             }
         }
 
+        // Função anti-XSS
+        function escapeHTML(str) {
+            if (!str) return '';
+            return str.replace(/[&<>'"]/g, 
+                tag => ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    "'": '&#39;',
+                    '"': '&quot;'
+                }[tag] || tag)
+            );
+        }
+
         async function fetchDashboardData() {
             try {
                 const response = await fetch('/api/dashboard/stats', { headers: getAuthHeaders() });
@@ -561,12 +575,15 @@
 
             data.latest.forEach(log => {
                 const date = new Date(log.date).toLocaleString('pt-BR');
+                const safeEntity = escapeHTML(log.entity);
+                const safeCategory = escapeHTML(log.category);
+                
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td>#${log.id}</td>
                     <td>${date}</td>
-                    <td><span class="entity-badge">${log.entity}</span></td>
-                    <td><span class="badge">${log.category}</span></td>
+                    <td><span class="entity-badge">${safeEntity}</span></td>
+                    <td><span class="badge">${safeCategory}</span></td>
                 `;
                 tbody.appendChild(tr);
             });

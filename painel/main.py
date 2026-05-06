@@ -32,13 +32,23 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 def get_current_username(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
     if not hasattr(app.state, "valid_tokens"):
-        app.state.valid_tokens = set()
+        app.state.valid_tokens = {}
     
-    if credentials.credentials not in app.state.valid_tokens:
+    token_info = app.state.valid_tokens.get(credentials.credentials)
+    if not token_info:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Sessão expirada ou inválida"
+            detail="Sessão inválida"
         )
+        
+    now = datetime.now(timezone.utc)
+    if (now - token_info["created_at"]).total_seconds() > 86400: # 24 horas
+        del app.state.valid_tokens[credentials.credentials]
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Sessão expirada. Faça login novamente."
+        )
+        
     return "admin"
 
 class LoginData(BaseModel):
@@ -46,17 +56,41 @@ class LoginData(BaseModel):
     password: str
 
 @app.post("/api/login")
-def login(data: LoginData):
+def login(data: LoginData, request: Request):
+    if not hasattr(app.state, "login_attempts"):
+        app.state.login_attempts = {}
+        
+    client_ip = request.client.host
+    now = datetime.now(timezone.utc)
+    
+    # Verifica Rate Limit
+    if client_ip in app.state.login_attempts:
+        attempts_info = app.state.login_attempts[client_ip]
+        if attempts_info["count"] >= 5:
+            if (now - attempts_info["last_attempt"]).total_seconds() < 900: # 15 minutos
+                raise HTTPException(status_code=429, detail="Muitas tentativas falhas. Bloqueado por 15 minutos.")
+            else:
+                # Reset após 15 min
+                app.state.login_attempts[client_ip] = {"count": 0, "last_attempt": now}
+    else:
+        app.state.login_attempts[client_ip] = {"count": 0, "last_attempt": now}
+
     correct_username = secrets.compare_digest(data.username, os.getenv("ADMIN_USER", "admin"))
     correct_password = secrets.compare_digest(data.password, os.getenv("ADMIN_PASS", "f@$p3l"))
     
     if not (correct_username and correct_password):
+        app.state.login_attempts[client_ip]["count"] += 1
+        app.state.login_attempts[client_ip]["last_attempt"] = now
         raise HTTPException(status_code=401, detail="Usuário ou senha incorretos")
+    
+    # Login de sucesso limpa falhas
+    app.state.login_attempts[client_ip] = {"count": 0, "last_attempt": now}
     
     token = secrets.token_hex(32)
     if not hasattr(app.state, "valid_tokens"):
-        app.state.valid_tokens = set()
-    app.state.valid_tokens.add(token)
+        app.state.valid_tokens = {}
+        
+    app.state.valid_tokens[token] = {"created_at": now}
     
     return {"access_token": token, "token_type": "bearer"}
 
