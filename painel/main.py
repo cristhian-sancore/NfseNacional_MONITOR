@@ -1,8 +1,10 @@
 import os
 import requests
 import asyncio
+import secrets
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials, APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
@@ -24,6 +26,30 @@ models.Base.metadata.create_all(bind=database.engine)
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Segurança e Autenticação
+security = HTTPBasic()
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
+
+def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
+    correct_username = secrets.compare_digest(credentials.username, os.getenv("ADMIN_USER", "admin"))
+    correct_password = secrets.compare_digest(credentials.password, os.getenv("ADMIN_PASS", "f@$p3l"))
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciais Incorretas",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+def verify_api_key(api_key: str = Depends(api_key_header)):
+    if api_key != os.getenv("WEBHOOK_KEY", "FASPEL_KEY_2026"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key"
+        )
+    return api_key
+
+
 def get_settings(db: Session):
     settings = db.query(models.SystemSettings).first()
     if not settings:
@@ -41,29 +67,32 @@ def get_settings(db: Session):
     return settings
 
 def send_whatsapp_message(text: str, db: Session):
-    settings = get_settings(db)
-    if not all([settings.evo_url, settings.evo_instance, settings.evo_token, settings.evo_number]):
-        print("Configuração da Evolution API incompleta. Mensagem não enviada.")
-        raise Exception("Configuração da Evolution API incompleta.")
+    try:
+        settings = get_settings(db)
+        if not all([settings.evo_url, settings.evo_instance, settings.evo_token, settings.evo_number]):
+            print("Configuração da Evolution API incompleta. Mensagem não enviada.")
+            return
 
-    # Remove barra do final se existir
-    url = settings.evo_url.rstrip("/")
-    endpoint = f"{url}/message/sendText/{settings.evo_instance}"
-    headers = {
-        "apikey": settings.evo_token,
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "number": settings.evo_number,
-        "text": text,
-        "delay": 1200
-    }
-    
-    response = requests.post(endpoint, json=payload, headers=headers, timeout=10)
-    response.raise_for_status()
-    print(f"Mensagem enviada com sucesso para {settings.evo_number}")
-    return response.json()
+        # Remove barra do final se existir
+        url = settings.evo_url.rstrip("/")
+        endpoint = f"{url}/message/sendText/{settings.evo_instance}"
+        headers = {
+            "apikey": settings.evo_token,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "number": settings.evo_number,
+            "text": text,
+            "delay": 1200
+        }
+        
+        response = requests.post(endpoint, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        print(f"Mensagem enviada com sucesso para {settings.evo_number}")
+        return response.json()
+    except Exception as e:
+        print(f"Falha ao notificar WhatsApp: {e}")
 
 async def summary_worker():
     while True:
@@ -74,7 +103,6 @@ async def summary_worker():
             now = datetime.now(timezone.utc)
             last_sent = settings.last_summary_sent
             
-            # Se last_sent não tem timezone, assume utc
             if last_sent and last_sent.tzinfo is None:
                 last_sent = last_sent.replace(tzinfo=timezone.utc)
             
@@ -86,7 +114,6 @@ async def summary_worker():
             interval_seconds = settings.summary_interval_hours * 3600
             
             if (now - last_sent).total_seconds() >= interval_seconds:
-                # Gerar Resumo
                 logs = db.query(models.ErrorLog).filter(models.ErrorLog.created_at >= last_sent).all()
                 total_errors = len(logs)
                 
@@ -95,7 +122,6 @@ async def summary_worker():
                 text += f"⚠️ *{total_errors} novos erros* registrados.\n"
                 
                 if total_errors > 0:
-                    # Encontrar a entidade com mais erros nesse periodo
                     from collections import Counter
                     entities = Counter([l.entity_name for l in logs])
                     top_entity = entities.most_common(1)[0]
@@ -112,14 +138,19 @@ async def summary_worker():
         except Exception as e:
             print(f"Erro no summary_worker: {e}")
         
-        await asyncio.sleep(60) # checa a cada 1 min
+        await asyncio.sleep(60)
 
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(summary_worker())
 
 @app.post("/api/webhook", response_model=schemas.ErrorLogResponse)
-def receive_error_log(log: schemas.ErrorLogCreate, db: Session = Depends(database.get_db)):
+def receive_error_log(
+    log: schemas.ErrorLogCreate, 
+    background_tasks: BackgroundTasks, 
+    db: Session = Depends(database.get_db),
+    api_key: str = Depends(verify_api_key)
+):
     db_log = models.ErrorLog(**log.model_dump())
     db.add(db_log)
     db.commit()
@@ -131,15 +162,14 @@ def receive_error_log(log: schemas.ErrorLogCreate, db: Session = Depends(databas
         f"⚠️ *Erro:* {log.error_category}\n"
         f"📄 *Detalhe:* {log.original_error}"
     )
-    try:
-        send_whatsapp_message(text, db)
-    except Exception as e:
-        print(f"Falha ao notificar WhatsApp: {e}")
+    
+    # Enviar em background para o webhook não demorar
+    background_tasks.add_task(send_whatsapp_message, text, db)
     
     return db_log
 
 @app.get("/api/dashboard/stats")
-def get_dashboard_stats(db: Session = Depends(database.get_db)):
+def get_dashboard_stats(db: Session = Depends(database.get_db), username: str = Depends(get_current_username)):
     total_errors = db.query(models.ErrorLog).count()
     common_errors = db.query(
         models.ErrorLog.error_category, 
@@ -161,11 +191,11 @@ def get_dashboard_stats(db: Session = Depends(database.get_db)):
     }
 
 @app.get("/api/settings", response_model=schemas.SystemSettingsResponse)
-def api_get_settings(db: Session = Depends(database.get_db)):
+def api_get_settings(db: Session = Depends(database.get_db), username: str = Depends(get_current_username)):
     return get_settings(db)
 
 @app.post("/api/settings", response_model=schemas.SystemSettingsResponse)
-def api_update_settings(settings_data: schemas.SystemSettingsUpdate, db: Session = Depends(database.get_db)):
+def api_update_settings(settings_data: schemas.SystemSettingsUpdate, db: Session = Depends(database.get_db), username: str = Depends(get_current_username)):
     settings = get_settings(db)
     settings.evo_url = settings_data.evo_url
     settings.evo_token = settings_data.evo_token
@@ -177,15 +207,34 @@ def api_update_settings(settings_data: schemas.SystemSettingsUpdate, db: Session
     return settings
 
 @app.post("/api/settings/test")
-def api_test_whatsapp(db: Session = Depends(database.get_db)):
+def api_test_whatsapp(db: Session = Depends(database.get_db), username: str = Depends(get_current_username)):
     try:
         text = "✅ *Teste de Conexão*\n\nSe você recebeu esta mensagem, significa que o Painel do Monitor NFE está configurado corretamente e pronto para enviar os alertas!"
-        result = send_whatsapp_message(text, db)
-        return {"status": "success", "message": "Mensagem enviada com sucesso!", "details": result}
+        
+        # Teste não deve ser background, para que o usuário receba feedback visual do sucesso/erro na hora
+        settings = get_settings(db)
+        if not all([settings.evo_url, settings.evo_instance, settings.evo_token, settings.evo_number]):
+            raise Exception("Configuração incompleta")
+        
+        url = settings.evo_url.rstrip("/")
+        endpoint = f"{url}/message/sendText/{settings.evo_instance}"
+        headers = {
+            "apikey": settings.evo_token,
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "number": settings.evo_number,
+            "text": text,
+            "delay": 1200
+        }
+        response = requests.post(endpoint, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        return {"status": "success", "message": "Mensagem enviada com sucesso!", "details": response.json()}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/", response_class=HTMLResponse)
-def index():
+def index(username: str = Depends(get_current_username)):
     with open("static/index.html", "r", encoding="utf-8") as f:
         return f.read()
