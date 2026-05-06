@@ -87,7 +87,8 @@ def main():
             'Port': '3050',
             'Database': r'C:\Fiorilli\BANCOS\SGB_DADOS\SIADADOS.FDB',
             'User': 'fscsia',
-            'Password': 'csfais'
+            'Password': 'csfais',
+            'FbDll': r'C:\Windows\System32\fbclient.dll'
         }
         config['AGENT'] = {
             'EntityName': 'Prefeitura Exemplo',
@@ -105,6 +106,15 @@ def main():
     db_path = config['DATABASE'].get('Database', r'C:\Fiorilli\BANCOS\SGB_DADOS\SIADADOS.FDB')
     db_user = config['DATABASE'].get('User', 'fscsia')
     db_pass = config['DATABASE'].get('Password', 'csfais')
+    fb_dll = config['DATABASE'].get('FbDll', '')
+    
+    # Se o usuário informou uma DLL customizada no ini, carrega ela explicitamente
+    if fb_dll and os.path.exists(fb_dll):
+        try:
+            fdb.load_api(fb_dll)
+            logger.info(f"Biblioteca Firebird carregada de: {fb_dll}")
+        except Exception as dll_err:
+            logger.error(f"Erro ao carregar a DLL do Firebird ({fb_dll}): {dll_err}")
     
     entity_name = config['AGENT'].get('EntityName', 'Desconhecido')
     panel_url = config['AGENT'].get('PanelUrl', 'http://localhost:8000/api/webhook')
