@@ -44,9 +44,11 @@ def send_whatsapp_message(text: str, db: Session):
     settings = get_settings(db)
     if not all([settings.evo_url, settings.evo_instance, settings.evo_token, settings.evo_number]):
         print("Configuração da Evolution API incompleta. Mensagem não enviada.")
-        return
+        raise Exception("Configuração da Evolution API incompleta.")
 
-    endpoint = f"{settings.evo_url}/message/sendText/{settings.evo_instance}"
+    # Remove barra do final se existir
+    url = settings.evo_url.rstrip("/")
+    endpoint = f"{url}/message/sendText/{settings.evo_instance}"
     headers = {
         "apikey": settings.evo_token,
         "Content-Type": "application/json"
@@ -63,12 +65,10 @@ def send_whatsapp_message(text: str, db: Session):
         }
     }
     
-    try:
-        response = requests.post(endpoint, json=payload, headers=headers, timeout=10)
-        response.raise_for_status()
-        print(f"Mensagem enviada com sucesso para {settings.evo_number}")
-    except Exception as e:
-        print(f"Falha ao enviar mensagem WhatsApp: {e}")
+    response = requests.post(endpoint, json=payload, headers=headers, timeout=10)
+    response.raise_for_status()
+    print(f"Mensagem enviada com sucesso para {settings.evo_number}")
+    return response.json()
 
 async def summary_worker():
     while True:
@@ -136,7 +136,10 @@ def receive_error_log(log: schemas.ErrorLogCreate, db: Session = Depends(databas
         f"⚠️ *Erro:* {log.error_category}\n"
         f"📄 *Detalhe:* {log.original_error}"
     )
-    send_whatsapp_message(text, db)
+    try:
+        send_whatsapp_message(text, db)
+    except Exception as e:
+        print(f"Falha ao notificar WhatsApp: {e}")
     
     return db_log
 
@@ -177,6 +180,15 @@ def api_update_settings(settings_data: schemas.SystemSettingsUpdate, db: Session
     db.commit()
     db.refresh(settings)
     return settings
+
+@app.post("/api/settings/test")
+def api_test_whatsapp(db: Session = Depends(database.get_db)):
+    try:
+        text = "✅ *Teste de Conexão*\n\nSe você recebeu esta mensagem, significa que o Painel do Monitor NFE está configurado corretamente e pronto para enviar os alertas!"
+        result = send_whatsapp_message(text, db)
+        return {"status": "success", "message": "Mensagem enviada com sucesso!", "details": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/", response_class=HTMLResponse)
 def index():
