@@ -232,13 +232,89 @@
         .btn-test:hover {
             background: rgba(255, 255, 255, 0.2);
         }
+        #login-screen {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            width: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            background: var(--bg-main);
+            z-index: 50;
+        }
+
+        #app-screen {
+            display: none;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+        }
+
+        .login-box {
+            width: 100%;
+            max-width: 400px;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .login-box h1 {
+            margin-bottom: 0.5rem;
+            font-size: 1.5rem;
+        }
+
+        .login-box p {
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+        }
+
+        .btn-logout {
+            background: rgba(239, 68, 68, 0.1);
+            color: #fca5a5;
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 600;
+            margin-left: auto;
+        }
+        .btn-logout:hover {
+            background: rgba(239, 68, 68, 0.2);
+        }
     </style>
 </head>
 <body>
-    <div class="container">
+
+    <!-- TELA DE LOGIN -->
+    <div id="login-screen">
+        <div class="glass-panel login-box">
+            <div style="margin-bottom: 1rem;">
+                <div style="width: 48px; height: 48px; background: var(--accent); border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1.5rem; color: white;">M</div>
+            </div>
+            <h1>Monitor NFSe</h1>
+            <p>Faça login para acessar o painel</p>
+            
+            <form onsubmit="handleLogin(event)">
+                <div class="form-group" style="text-align: left;">
+                    <label>Usuário</label>
+                    <input type="text" id="login_user" required placeholder="Digite o usuário">
+                </div>
+                <div class="form-group" style="text-align: left;">
+                    <label>Senha</label>
+                    <input type="password" id="login_pass" required placeholder="Digite a senha">
+                </div>
+                <div id="login-error" style="color: var(--error); margin-bottom: 1rem; display: none; font-size: 0.9rem;">Credenciais inválidas</div>
+                <button type="submit" class="btn-save" id="btn-login" style="margin-top: 1rem;">Entrar no Sistema</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- TELA DO PAINEL -->
+    <div class="container" id="app-screen">
         <header>
             <h1>Painel de Monitoramento NFSe</h1>
-            <div style="display: flex; gap: 1rem; align-items: center;">
+            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
                 <button onclick="showTab('dashboard')" class="nav-btn active" id="btn-dashboard">Dashboard</button>
                 <button onclick="showTab('settings')" class="nav-btn" id="btn-settings">Configurações</button>
                 <div class="glass-panel" style="padding: 0.5rem 1rem;">
@@ -247,6 +323,7 @@
                         Online
                     </span>
                 </div>
+                <button onclick="logout()" class="btn-logout">Sair</button>
             </div>
         </header>
 
@@ -345,9 +422,67 @@
         let errorsChartInstance = null;
         let entitiesChartInstance = null;
 
+        // INTERCEPTOR DE AUTENTICAÇÃO
+        function getAuthHeaders() {
+            const token = localStorage.getItem('token');
+            return token ? { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            document.getElementById('app-screen').style.opacity = '0';
+            setTimeout(() => {
+                document.getElementById('app-screen').style.display = 'none';
+                document.getElementById('login-screen').style.display = 'flex';
+                document.getElementById('login_pass').value = '';
+            }, 300);
+        }
+
+        async function handleLogin(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btn-login');
+            btn.innerText = 'Entrando...';
+            btn.disabled = true;
+            document.getElementById('login-error').style.display = 'none';
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: document.getElementById('login_user').value,
+                        password: document.getElementById('login_pass').value
+                    })
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    localStorage.setItem('token', data.access_token);
+                    
+                    document.getElementById('login-screen').style.display = 'none';
+                    const app = document.getElementById('app-screen');
+                    app.style.display = 'block';
+                    
+                    await fetchDashboardData();
+                    
+                    setTimeout(() => {
+                        app.style.opacity = '1';
+                    }, 50);
+                } else {
+                    document.getElementById('login-error').style.display = 'block';
+                }
+            } catch (error) {
+                console.error(error);
+            } finally {
+                btn.innerText = 'Entrar no Sistema';
+                btn.disabled = false;
+            }
+        }
+
         async function fetchDashboardData() {
             try {
-                const response = await fetch('/api/dashboard/stats');
+                const response = await fetch('/api/dashboard/stats', { headers: getAuthHeaders() });
+                if (response.status === 401) return logout();
                 if (!response.ok) throw new Error('Falha na rede');
                 const data = await response.json();
                 updateDashboard(data);
@@ -447,7 +582,8 @@
 
         async function loadSettings() {
             try {
-                const response = await fetch('/api/settings');
+                const response = await fetch('/api/settings', { headers: getAuthHeaders() });
+                if (response.status === 401) return logout();
                 const data = await response.json();
                 document.getElementById('evo_url').value = data.evo_url;
                 document.getElementById('evo_token').value = data.evo_token;
@@ -475,9 +611,11 @@
             try {
                 const response = await fetch('/api/settings', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: getAuthHeaders(),
                     body: JSON.stringify(payload)
                 });
+                
+                if (response.status === 401) return logout();
                 
                 if (response.ok) {
                     const msgDiv = document.getElementById('save-msg');
@@ -505,7 +643,7 @@
                 // Salvar primeiro caso tenha mudado os campos
                 await fetch('/api/settings', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({
                         evo_url: document.getElementById('evo_url').value,
                         evo_token: document.getElementById('evo_token').value,
@@ -516,8 +654,11 @@
                 });
 
                 const response = await fetch('/api/settings/test', {
-                    method: 'POST'
+                    method: 'POST',
+                    headers: getAuthHeaders()
                 });
+                
+                if (response.status === 401) return logout();
                 
                 const data = await response.json();
                 
@@ -540,10 +681,16 @@
             }
         }
 
-        // Carregar dados iniciais e definir polling a cada 10 segundos
-        fetchDashboardData();
+        // Inicialização
+        if (localStorage.getItem('token')) {
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('app-screen').style.display = 'block';
+            document.getElementById('app-screen').style.opacity = '1';
+            fetchDashboardData();
+        }
+
         setInterval(() => {
-            if (document.getElementById('tab-dashboard').style.display !== 'none') {
+            if (localStorage.getItem('token') && document.getElementById('tab-dashboard').style.display !== 'none') {
                 fetchDashboardData();
             }
         }, 10000);

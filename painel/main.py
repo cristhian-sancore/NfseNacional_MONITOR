@@ -4,7 +4,7 @@ import asyncio
 import secrets
 from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials, APIKeyHeader
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
@@ -27,19 +27,38 @@ os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Segurança e Autenticação
-security = HTTPBasic()
+bearer_scheme = HTTPBearer()
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
-def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
-    correct_username = secrets.compare_digest(credentials.username, os.getenv("ADMIN_USER", "admin"))
-    correct_password = secrets.compare_digest(credentials.password, os.getenv("ADMIN_PASS", "f@$p3l"))
-    if not (correct_username and correct_password):
+def get_current_username(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
+    if not hasattr(app.state, "valid_tokens"):
+        app.state.valid_tokens = set()
+    
+    if credentials.credentials not in app.state.valid_tokens:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciais Incorretas",
-            headers={"WWW-Authenticate": "Basic"},
+            detail="Sessão expirada ou inválida"
         )
-    return credentials.username
+    return "admin"
+
+class LoginData(BaseModel):
+    username: str
+    password: str
+
+@app.post("/api/login")
+def login(data: LoginData):
+    correct_username = secrets.compare_digest(data.username, os.getenv("ADMIN_USER", "admin"))
+    correct_password = secrets.compare_digest(data.password, os.getenv("ADMIN_PASS", "f@$p3l"))
+    
+    if not (correct_username and correct_password):
+        raise HTTPException(status_code=401, detail="Usuário ou senha incorretos")
+    
+    token = secrets.token_hex(32)
+    if not hasattr(app.state, "valid_tokens"):
+        app.state.valid_tokens = set()
+    app.state.valid_tokens.add(token)
+    
+    return {"access_token": token, "token_type": "bearer"}
 
 def verify_api_key(api_key: str = Depends(api_key_header)):
     if api_key != os.getenv("WEBHOOK_KEY", "FASPEL_KEY_2026"):
@@ -235,6 +254,6 @@ def api_test_whatsapp(db: Session = Depends(database.get_db), username: str = De
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/", response_class=HTMLResponse)
-def index(username: str = Depends(get_current_username)):
+def index():
     with open("static/index.html", "r", encoding="utf-8") as f:
         return f.read()
