@@ -21,3 +21,11 @@ class SystemSettings(Base):
     evo_number = Column(String(50), default="")
     summary_interval_hours = Column(Float, default=12.0)
     last_summary_sent = Column(DateTime(timezone=True), nullable=True)
+
+class AgentHeartbeat(Base):
+    __tablename__ = "agent_heartbeats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entity_name = Column(String(100), unique=True, index=True)
+    last_ping = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    is_offline = Column(Integer, default=0) # 0 = Online, 1 = Offline (para evitar múltiplos avisos)

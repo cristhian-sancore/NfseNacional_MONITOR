@@ -26,3 +26,6 @@ class SystemSettingsResponse(SystemSettingsUpdate):
 
     class Config:
         from_attributes = True
+
+class AgentHeartbeatCreate(BaseModel):
+    entity_name: str

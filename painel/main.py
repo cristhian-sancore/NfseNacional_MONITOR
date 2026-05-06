@@ -207,10 +207,86 @@ async def grouped_alerts_worker():
             
         await asyncio.sleep(30)
 
+async def heartbeat_worker():
+    while True:
+        try:
+            db = database.SessionLocal()
+            now = datetime.now(timezone.utc)
+            ten_minutes_ago = now - timedelta(minutes=10)
+            
+            # Buscar agentes inativos que não foram notificados (is_offline == 0)
+            offline_agents = db.query(models.AgentHeartbeat).filter(
+                models.AgentHeartbeat.last_ping < ten_minutes_ago,
+                models.AgentHeartbeat.is_offline == 0
+            ).all()
+            
+            for agent in offline_agents:
+                agent.is_offline = 1
+                text = (
+                    f"⚠️ *ALERTA DE QUEDA DE AGENTE* ⚠️\n\n"
+                    f"O servidor/agente da entidade *{agent.entity_name}* parou de responder há mais de 10 minutos!\n"
+                    f"Verifique se o computador foi desligado ou o serviço interrompido."
+                )
+                send_whatsapp_message(text) # Cria sessão própria
+            
+            db.commit()
+            db.close()
+        except Exception as e:
+            print(f"Erro no heartbeat_worker: {e}")
+            
+        await asyncio.sleep(60) # Checa a cada minuto
+
+async def cleanup_worker():
+    while True:
+        try:
+            db = database.SessionLocal()
+            now = datetime.now(timezone.utc)
+            thirty_days_ago = now - timedelta(days=30)
+            
+            # Remover erros com mais de 30 dias
+            deleted = db.query(models.ErrorLog).filter(models.ErrorLog.created_at < thirty_days_ago).delete()
+            if deleted > 0:
+                db.commit()
+                print(f"Limpeza Automática: {deleted} registros antigos deletados.")
+                
+            db.close()
+        except Exception as e:
+            print(f"Erro no cleanup_worker: {e}")
+            
+        # Roda a limpeza 1 vez por dia (24h)
+        await asyncio.sleep(86400)
+
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(summary_worker())
     asyncio.create_task(grouped_alerts_worker())
+    asyncio.create_task(heartbeat_worker())
+    asyncio.create_task(cleanup_worker())
+
+@app.post("/api/heartbeat")
+def receive_heartbeat(
+    hb: schemas.AgentHeartbeatCreate, 
+    db: Session = Depends(database.get_db),
+    api_key: str = Depends(verify_api_key)
+):
+    agent = db.query(models.AgentHeartbeat).filter(models.AgentHeartbeat.entity_name == hb.entity_name).first()
+    now = datetime.now(timezone.utc)
+    
+    if agent:
+        # Se estava offline e voltou, manda aviso de reconexão
+        if agent.is_offline == 1:
+            agent.is_offline = 0
+            text = f"✅ *Agente Reconectado*\n\nO servidor da entidade *{agent.entity_name}* voltou a responder!"
+            background_tasks = BackgroundTasks()
+            background_tasks.add_task(send_whatsapp_message, text, None)
+            
+        agent.last_ping = now
+    else:
+        agent = models.AgentHeartbeat(entity_name=hb.entity_name, last_ping=now, is_offline=0)
+        db.add(agent)
+        
+    db.commit()
+    return {"status": "ok"}
 
 @app.post("/api/webhook", response_model=schemas.ErrorLogResponse)
 def receive_error_log(
